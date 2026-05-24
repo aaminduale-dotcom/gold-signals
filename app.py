@@ -2,15 +2,23 @@ import os
 import requests
 import threading
 import time
-from flask import Flask
+from flask import Flask, request
 
 app = Flask(__name__)
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
+CLAUDE_KEY = os.environ.get("CLAUDE_KEY")
 
-def send(msg):
+def send(msg, chat_id=None):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
+    requests.post(url, data={"chat_id": chat_id or CHAT_ID, "text": msg, "parse_mode": "HTML"})
+
+def ask_claude(question, context=""):
+    headers = {"x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    prompt = f"You are a professional Gold (XAUUSD) trading assistant. Be concise and helpful. {context}\n\nUser: {question}"
+    data = {"model": "claude-haiku-4-5-20251001", "max_tokens": 300, "messages": [{"role": "user", "content": prompt}]}
+    r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=data)
+    return r.json()["content"][0]["text"]
 
 def get_candles():
     url = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1h&range=5d"
@@ -42,8 +50,7 @@ def rsi(data, period=14):
     al = sum(losses[-period:]) / period
     if al == 0:
         return 100
-    rs = ag / al
-    return 100 - (100 / (1 + rs))
+    return 100 - (100 / (1 + (ag / al)))
 
 def atr(highs, lows, closes, period=14):
     trs = []
@@ -54,20 +61,22 @@ def atr(highs, lows, closes, period=14):
     return sum(trs[-period:]) / period if trs else 1
 
 last_signal = None
+last_price = None
+last_sl = None
+last_tp = None
 
 def analyze():
-    global last_signal
+    global last_signal, last_price, last_sl, last_tp
     while True:
         try:
             closes, highs, lows = get_candles()
             closes = [c for c in closes if c]
             price = closes[-1]
-            ema200 = ema(closes, 200) if len(closes) >= 200 else ema(closes, len(closes))
+            ema200 = ema(closes, min(200, len(closes)))
             rsi_val = rsi(closes)
             atr_val = atr(highs, lows, closes)
             sl_dist = atr_val * 1.5
             tp_dist = atr_val * 3
-
             signal = None
             if price > ema200 and rsi_val < 35:
                 signal = "BUY"
@@ -77,13 +86,15 @@ def analyze():
                 signal = "SELL"
                 sl = round(price + sl_dist, 2)
                 tp = round(price - tp_dist, 2)
-
             if signal and signal != last_signal:
                 last_signal = signal
+                last_price = round(price, 2)
+                last_sl = sl
+                last_tp = tp
                 emoji = "🟢" if signal == "BUY" else "🔴"
                 msg = f"{emoji} <b>{signal} GOLD</b>\nEntry: {round(price,2)}\nStop Loss: {sl}\nTake Profit: {tp}\nRSI: {round(rsi_val,1)}"
                 send(msg)
-        except Exception as e:
+        except:
             pass
         time.sleep(300)
 
@@ -91,6 +102,20 @@ t = threading.Thread(target=analyze)
 t.daemon = True
 t.start()
 
+@app.route("/telegram", methods=["POST"])
+def telegram():
+    data = request.json
+    if "message" in data:
+        chat_id = data["message"]["chat"]["id"]
+        text = data["message"].get("text", "")
+        if text:
+            context = ""
+            if last_signal:
+                context = f"Last signal was {last_signal} at {last_price}, SL:{last_sl}, TP:{last_tp}"
+            reply = ask_claude(text, context)
+            send(reply, chat_id)
+    return "ok"
+
 @app.route("/")
 def home():
-    return "Gold Signal Bot Running"
+    return "Gold AI Bot Running"
