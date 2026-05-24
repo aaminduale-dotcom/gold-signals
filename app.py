@@ -7,18 +7,18 @@ from flask import Flask, request
 app = Flask(__name__)
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
-CLAUDE_KEY = os.environ.get("CLAUDE_KEY")
+GROQ_KEY = os.environ.get("GROQ_KEY")
 
 def send(msg, chat_id=None):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": chat_id or CHAT_ID, "text": msg, "parse_mode": "HTML"})
 
-def ask_claude(question, context=""):
-    headers = {"x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"}
-    prompt = f"You are a professional Gold (XAUUSD) trading assistant. Be concise and helpful. {context}\n\nUser: {question}"
-    data = {"model": "claude-haiku-4-5-20251001", "max_tokens": 300, "messages": [{"role": "user", "content": prompt}]}
-    r = requests.post("https://api.anthropic.com/v1/messages", headers=headers, json=data)
-    return r.json()["content"][0]["text"]
+def ask_ai(question, context=""):
+    headers = {"Authorization": f"Bearer {GROQ_KEY}", "Content-Type": "application/json"}
+    prompt = f"You are a professional Gold XAUUSD trading assistant. Be concise and helpful. {context}\n\nUser: {question}"
+    data = {"model": "llama3-8b-8192", "messages": [{"role": "user", "content": prompt}], "max_tokens": 300}
+    r = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=data)
+    return r.json()["choices"][0]["message"]["content"]
 
 def get_candles():
     url = "https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1h&range=5d"
@@ -112,7 +112,7 @@ def telegram():
             context = ""
             if last_signal:
                 context = f"Last signal was {last_signal} at {last_price}, SL:{last_sl}, TP:{last_tp}"
-            reply = ask_claude(text, context)
+            reply = ask_ai(text, context)
             send(reply, chat_id)
     return "ok"
 
